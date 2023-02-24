@@ -65,10 +65,21 @@ type tableLine struct {
 	memoryLimits  string
 }
 
+var headerStrings = tableLine{
+	node:          "NODE",
+	cpuRequest:    "CPU REQUEST",
+	cpuLimits:     "CPU LIMITS",
+	memoryRequest: "MEMORY REQUESTS",
+	memoryLimits:  "MEMORY LIMITS",
+}
+
 func (tp *tablePrinter) Print(availableFormat bool) {
 	tp.w.Init(os.Stdout, 0, 8, 2, ' ', 0)
 	tp.availableFormat = availableFormat
 	NodeMetrics := tp.cm.getNodeMetrics()
+
+	tp.PrintLine(&headerStrings)
+
 	if len(NodeMetrics) > 1 {
 		tp.PrintClusterLine()
 	}
@@ -323,7 +334,7 @@ func resourceString(resourceType string, actual, allocatable resource.Quantity, 
 			actualStr = fmt.Sprintf("%d", allocatable.Value()-actual.Value())
 			allocatableStr = fmt.Sprintf("%d", allocatable.Value())
 		}
-		return fmt.Sprintf("%s%s", actualStr, allocatableStr)
+		return fmt.Sprintf("%s/%s", actualStr, allocatableStr)
 	}
 	switch resourceType {
 	case "cpu":

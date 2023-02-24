@@ -106,7 +106,7 @@ func (tp *tablePrinter) PrintClusterLine() {
 }
 func (tp *tablePrinter) PrintNodeLine(nodeName string, nm *nodeMetric) {
 	tp.PrintLine(&tableLine{
-		node:          "*",
+		node:          nodeName,
 		cpuRequest:    nm.cpu.requestString(tp.availableFormat),
 		cpuLimits:     nm.cpu.limitString(tp.availableFormat),
 		memoryRequest: nm.memory.requestString(tp.availableFormat),

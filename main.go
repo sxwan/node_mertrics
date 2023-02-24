@@ -1,1 +1,7 @@
-package node_mertrics
+package main
+
+import "node_metrics/capacity"
+
+func main() {
+	capacity.FetchAndPrint()
+}

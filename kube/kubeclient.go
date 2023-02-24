@@ -4,7 +4,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	metrics "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 func NewClient() (*kubernetes.Clientset, error) {
@@ -14,15 +13,6 @@ func NewClient() (*kubernetes.Clientset, error) {
 	}
 
 	return kubernetes.NewForConfig(config)
-}
-
-func NewMertricsClient() (*metrics.Clientset, error) {
-	config, err := getKubeConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	return metrics.NewForConfig(config)
 }
 
 func getKubeConfig() (*rest.Config, error) {

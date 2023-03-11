@@ -2,6 +2,7 @@ package capacity
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -20,15 +21,16 @@ const Mebibyte = 1024 * 1024
 type resourceMetric struct {
 	resourceType string
 	allocatable  resource.Quantity
-	utilization  resource.Quantity
 	request      resource.Quantity
 	limit        resource.Quantity
+	labels       map[string]string
 }
 
 type clusterMetric struct {
 	cpu         *resourceMetric
 	memory      *resourceMetric
 	gpu         *resourceMetric
+	labels      *resourceMetric
 	nodeMetrics map[string]*nodeMetric
 }
 
@@ -37,6 +39,7 @@ type nodeMetric struct {
 	cpu        *resourceMetric
 	memory     *resourceMetric
 	gpu        *resourceMetric
+	labels     *resourceMetric
 	podMetrics map[string]*podMetric
 }
 
@@ -46,6 +49,7 @@ type podMetric struct {
 	cpu              *resourceMetric
 	memory           *resourceMetric
 	gpu              *resourceMetric
+	labels           *resourceMetric
 	containerMetrics map[string]*containerMetric
 }
 
@@ -69,6 +73,7 @@ type tableLine struct {
 	memoryLimits  string
 	gpuRequest    string
 	gpuLimits     string
+	labels        string
 }
 
 var headerStrings = tableLine{
@@ -79,6 +84,7 @@ var headerStrings = tableLine{
 	memoryLimits:  "MEMORY LIMITS",
 	gpuRequest:    "GPU REQUEST",
 	gpuLimits:     "GPU LIMITES",
+	labels:        "LABELS",
 }
 
 func (tp *tablePrinter) Print(availableFormat bool) {
@@ -113,6 +119,7 @@ func (tp *tablePrinter) PrintLineItems(tl *tableLine) []string {
 	lineItems = append(lineItems, tl.memoryLimits)
 	lineItems = append(lineItems, tl.gpuRequest)
 	lineItems = append(lineItems, tl.gpuLimits)
+	lineItems = append(lineItems, tl.labels)
 	return lineItems
 }
 
@@ -125,6 +132,7 @@ func (tp *tablePrinter) PrintClusterLine() {
 		memoryLimits:  tp.cm.memory.limitString(tp.availableFormat),
 		gpuRequest:    tp.cm.gpu.requestString(tp.availableFormat),
 		gpuLimits:     tp.cm.gpu.limitString(tp.availableFormat),
+		labels:        tp.cm.labels.labelsString(tp.availableFormat),
 	})
 }
 func (tp *tablePrinter) PrintNodeLine(nodeName string, nm *nodeMetric) {
@@ -136,9 +144,11 @@ func (tp *tablePrinter) PrintNodeLine(nodeName string, nm *nodeMetric) {
 		memoryLimits:  nm.memory.limitString(tp.availableFormat),
 		gpuRequest:    nm.gpu.requestString(tp.availableFormat),
 		gpuLimits:     nm.gpu.limitString(tp.availableFormat),
+		labels:        nm.labels.labelsString(tp.availableFormat),
 	})
 }
 
+// 对node节点排序
 func (cm *clusterMetric) getNodeMetrics() []*nodeMetric {
 	NodeMetrics := make([]*nodeMetric, len(cm.nodeMetrics))
 
@@ -188,6 +198,7 @@ func buildClusterMetric(podList *corev1.PodList, pmList *v1beta1.PodMetricsList,
 		cpu:         &resourceMetric{resourceType: "cpu"},
 		memory:      &resourceMetric{resourceType: "memory"},
 		gpu:         &resourceMetric{resourceType: "gpu"},
+		labels:      &resourceMetric{resourceType: "labels"},
 		nodeMetrics: map[string]*nodeMetric{},
 	}
 	var totalPodAllocatable int64
@@ -215,15 +226,11 @@ func buildClusterMetric(podList *corev1.PodList, pmList *v1beta1.PodMetricsList,
 				resourceType: "gpu",
 				allocatable:  node.Status.Allocatable["gpu"],
 			},
+			labels: &resourceMetric{
+				resourceType: "labels",
+				labels:       node.ObjectMeta.Labels,
+			},
 			podMetrics: map[string]*podMetric{},
-		}
-	}
-
-	if nmList != nil {
-		for _, nm := range nmList.Items {
-			cm.nodeMetrics[nm.Name].cpu.utilization = nm.Usage["cpu"]
-			cm.nodeMetrics[nm.Name].memory.utilization = nm.Usage["memory"]
-			cm.nodeMetrics[nm.Name].memory.utilization = nm.Usage["gpu"]
 		}
 	}
 
@@ -243,11 +250,6 @@ func buildClusterMetric(podList *corev1.PodList, pmList *v1beta1.PodMetricsList,
 	for _, node := range nodeList.Items {
 		if nm, ok := cm.nodeMetrics[node.Name]; ok {
 			cm.addNodeMetric(nm)
-			// When namespace filtering is configured, we want to sum pod
-			// utilization instead of relying on node util.
-			if nmList == nil {
-				nm.addPodUtilization()
-			}
 		}
 	}
 
@@ -256,7 +258,6 @@ func buildClusterMetric(podList *corev1.PodList, pmList *v1beta1.PodMetricsList,
 
 func (rm *resourceMetric) addMetric(m *resourceMetric) {
 	rm.allocatable.Add(m.allocatable)
-	rm.utilization.Add(m.utilization)
 	rm.request.Add(m.request)
 	rm.limit.Add(m.limit)
 }
@@ -283,6 +284,10 @@ func (cm *clusterMetric) addPodMetric(pod *corev1.Pod, podMetrics v1beta1.PodMet
 			resourceType: "gpu",
 			request:      req["gpu"],
 			limit:        limit["gpu"],
+		},
+		labels: &resourceMetric{
+			resourceType: "labels",
+			labels:       pod.ObjectMeta.Labels,
 		},
 		containerMetrics: map[string]*containerMetric{},
 	}
@@ -322,18 +327,6 @@ func (cm *clusterMetric) addPodMetric(pod *corev1.Pod, podMetrics v1beta1.PodMet
 			nm.gpu.request.Add(req["gpu"])
 			nm.gpu.limit.Add(limit["gpu"])
 		}
-
-		for _, container := range podMetrics.Containers {
-			cm := pm.containerMetrics[container.Name]
-			if cm != nil {
-				pm.containerMetrics[container.Name].cpu.utilization = container.Usage["cpu"]
-				pm.cpu.utilization.Add(container.Usage["cpu"])
-				pm.containerMetrics[container.Name].memory.utilization = container.Usage["memory"]
-				pm.memory.utilization.Add(container.Usage["memory"])
-				pm.containerMetrics[container.Name].memory.utilization = container.Usage["gpu"]
-				pm.memory.utilization.Add(container.Usage["gpu"])
-			}
-		}
 	}
 }
 
@@ -341,14 +334,6 @@ func (cm *clusterMetric) addNodeMetric(nm *nodeMetric) {
 	cm.cpu.addMetric(nm.cpu)
 	cm.memory.addMetric(nm.memory)
 	cm.gpu.addMetric(nm.gpu)
-}
-
-func (nm *nodeMetric) addPodUtilization() {
-	for _, pm := range nm.podMetrics {
-		nm.cpu.utilization.Add(pm.cpu.utilization)
-		nm.memory.utilization.Add(pm.memory.utilization)
-		nm.gpu.utilization.Add(pm.gpu.utilization)
-	}
 }
 
 func resourceString(resourceType string, actual, allocatable resource.Quantity, avaliableFormat bool) string {
@@ -404,4 +389,14 @@ func (rm *resourceMetric) requestString(availableFormat bool) string {
 
 func (rm *resourceMetric) limitString(availableFormat bool) string {
 	return resourceString(rm.resourceType, rm.limit, rm.allocatable, availableFormat)
+}
+
+func (rm *resourceMetric) labelsString(availableFormat bool) string {
+	jsonBytes, err := json.Marshal(rm.labels)
+	if err != nil {
+		panic(err)
+	}
+
+	jsonString := string(jsonBytes)
+	return jsonString
 }
